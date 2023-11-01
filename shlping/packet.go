@@ -1,68 +1,76 @@
 package shlping
 
 import (
+	"fmt"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/unix"
 	"net"
 	"time"
 )
 
-// Statistics represent the stats of a currently running or finished
-// pinger operation.
-type Statistics struct {
-	// PacketsRecv is the number of packets received.
-	PacketsRecv int
-
-	// PacketsSent is the number of packets sent.
-	PacketsSent int
-
-	// PacketsRecvDuplicates is the number of duplicate responses there were to a sent packet.
-	PacketsRecvDuplicates int
-
-	// PacketLoss is the percentage of packets lost.
-	PacketLoss float64
-
-	// IPAddr is the address of the host being pinged.
-	IPAddr *net.IPAddr
-
-	// Addr is the string address of the host being pinged.
-	Addr string
-
-	// Rtts is all of the round-trip times sent via this pinger.
-	Rtts []time.Duration
-
-	// MinRtt is the minimum round-trip time sent via this pinger.
-	MinRtt time.Duration
-
-	// MaxRtt is the maximum round-trip time sent via this pinger.
-	MaxRtt time.Duration
-
-	// AvgRtt is the average round-trip time sent via this pinger.
-	AvgRtt time.Duration
-
-	// StdDevRtt is the standard deviation of the round-trip times sent via
-	// this pinger.
-	StdDevRtt time.Duration
+// 数据包
+type packet struct {
+	bytes  []byte
+	nbytes int
+	ttl    int
 }
 
-// Packet represents a received and processed ICMP echo packet.
+// Packet 用于表示ICMP包
 type Packet struct {
-	// Rtt is the round-trip time it took to ping.
+	// Rtt ping的往返时间
 	Rtt time.Duration
-
-	// IPAddr is the address of the host being pinged.
+	// IPAddr 目的地址
 	IPAddr *net.IPAddr
-
-	// Addr is the string address of the host being pinged.
+	// Addr 目的地址
 	Addr string
-
-	// NBytes is the number of bytes in the message.
+	// NBytes 数据长度
 	Nbytes int
-
-	// Seq is the ICMP sequence number.
+	// Seq icmp包的序号
 	Seq int
-
-	// TTL is the Time To Live on the packet.
+	// TTL 包的TTL
 	Ttl int
-
-	// ID is the ICMP identifier.
+	// ID ICMP包的唯一ID
 	ID int
+}
+
+type ICMPv4Data struct {
+	IPv4Header *ipv4.Header
+	ICMPData   *icmp.Message
+}
+
+func (i *ICMPv4Data) Marshal() ([]byte, error) {
+	var err error
+	res := make([]byte, 4096)
+	ipHeader, err := i.IPv4Header.Marshal()
+	if err != nil {
+		fmt.Println(fmt.Sprintf("ip header marshal error:%s:", err.Error()))
+		return nil, err
+	}
+	copy(res[:], ipHeader)
+
+	icmpData, err := i.ICMPData.Marshal(nil)
+	if err != nil {
+		fmt.Println(fmt.Sprintf("icmpData marshal error:%s:", err.Error()))
+		return nil, err
+	}
+	copy(res[len(ipHeader):], icmpData)
+	return res, nil
+}
+
+func (i *ICMPv4Data) Unmarshal(b []byte) error {
+	var err error
+	err = i.IPv4Header.Parse(b[:ipv4.HeaderLen])
+	if err != nil {
+		fmt.Println(fmt.Sprintf("ipv4 header unmarshal error:%s:", err.Error()))
+		return err
+	}
+
+	icmpData, err := icmp.ParseMessage(unix.IPPROTO_ICMP, b[ipv4.HeaderLen:])
+	if err != nil {
+		fmt.Println(fmt.Sprintf("icmpData unmarshal error:%s:", err.Error()))
+		return err
+	}
+	i.ICMPData = icmpData
+	return nil
 }

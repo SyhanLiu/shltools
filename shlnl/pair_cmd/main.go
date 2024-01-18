@@ -19,7 +19,6 @@ func main() {
 	}
 
 	nlSockAddr := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
-
 	data := make([]byte, 0)
 
 	nlMsgHdr := &unix.NlMsghdr{
@@ -34,7 +33,6 @@ func main() {
 		Seq:   uint32(time.Now().Unix()),
 		Pid:   0,
 	}
-	data = append(data, shlnl.WriteNlMsghdrToBuf(nlMsgHdr)...)
 
 	ifInfoMsg := &unix.IfInfomsg{
 		// AF_UNSPEC:函数返回的是适用于指定主机名和服务名且适合任何协议族的地址。
@@ -95,6 +93,10 @@ func main() {
 		Type: unix.IFLA_IFNAME, // 表示指定名称
 	}
 	data = append(data, shlnl.WriteRtAttrToBuf(rta, append([]byte(pveth), 0))...)
+
+	nlMsgHdr.Len += uint32(rta.Len + rtaLinkInfo.Len + rtaInfoKind.Len + rtaInfoData.Len + rtaInfoPeer.Len + rta.Len)
+	fmt.Println(nlMsgHdr.Len)
+	data = append(shlnl.WriteNlMsghdrToBuf(nlMsgHdr), data...)
 
 	err = unix.Sendto(socket, data, 0, nlSockAddr)
 	if err != nil {

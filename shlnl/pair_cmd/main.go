@@ -19,10 +19,11 @@ func main() {
 	}
 
 	nlSockAddr := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
-	data := make([]byte, 0)
+	data := make([]byte, 4096)
+	//startPtr := uintptr(unsafe.Pointer(&data[0]))
 
 	nlMsgHdr := &unix.NlMsghdr{
-		Len: unix.SizeofNlMsghdr + unix.SizeofIfInfomsg, // 消息头的长度
+		Len: unix.NLMSG_HDRLEN + unix.SizeofIfInfomsg, // 消息头的长度
 		// RTM_NEWLINK, RTM_DELLINK, RTM_GETLINK。创建，删除，获取特定的网络设备
 		Type: unix.RTM_NEWLINK,
 		// NLM_F_REQUEST：请求消息，从用户空间到内核空间的消息都需要将该位置位。
@@ -31,26 +32,28 @@ func main() {
 		// NLM_F_ACK：要求内核为该请求发送回复响应。Request for an acknowledgement on success. -- From linux man
 		Flags: unix.NLM_F_REQUEST | unix.NLM_F_CREATE | unix.NLM_F_EXCL | unix.NLM_F_ACK,
 		Seq:   uint32(time.Now().Unix()),
-		Pid:   0,
+		Pid:   uint32(unix.Getpid()), // Port ID
 	}
 
 	ifInfoMsg := &unix.IfInfomsg{
 		// AF_UNSPEC:函数返回的是适用于指定主机名和服务名且适合任何协议族的地址。
 		Family: unix.AF_UNSPEC,
 	}
-	data = append(data, shlnl.WriteIfInfomsgToBuf(ifInfoMsg)...)
+	copy(data[unix.NLMSG_HDRLEN:], shlnl.WriteIfInfomsgToBuf(ifInfoMsg))
 
 	rta := &unix.RtAttr{
 		Len:  unix.SizeofRtAttr + uint16(len(veth)+1),
 		Type: unix.IFLA_IFNAME, // 表示指定名称
 	}
-	data = append(data, shlnl.WriteRtAttrToBuf(rta, append([]byte(veth), 0))...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rta, append([]byte(veth), 0)))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rta.Len)))
 
 	rtaLinkInfo := &unix.RtAttr{
 		Len:  unix.SizeofRtAttr,
 		Type: unix.IFLA_LINKINFO, // 设置link info
 	}
-	data = append(data, shlnl.WriteRtAttrToBuf(rtaLinkInfo, nil)...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaLinkInfo, nil))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaLinkInfo.Len)))
 
 	rtaInfoKind := &unix.RtAttr{
 		Len:  unix.SizeofRtAttr + uint16(len("veth")) + 1,
@@ -74,31 +77,41 @@ func main() {
 			.get_num_rx_queues	= veth_get_num_queues,
 		};
 	*/
-	data = append(data, shlnl.WriteRtAttrToBuf(rtaInfoKind, append([]byte("veth"), 0))...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaInfoKind, append([]byte("veth"), 0)))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaInfoKind.Len)))
 
 	rtaInfoData := &unix.RtAttr{
 		Len:  unix.SizeofRtAttr,
 		Type: unix.IFLA_INFO_DATA,
 	}
-	data = append(data, shlnl.WriteRtAttrToBuf(rtaInfoData, nil)...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaInfoData, nil))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaInfoData.Len)))
 
 	rtaInfoPeer := &unix.RtAttr{
 		Len:  unix.SizeofRtAttr,
 		Type: 1, // 对端接口
 	}
-	data = append(data, shlnl.WriteRtAttrToBuf(rtaInfoPeer, nil)...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaInfoPeer, nil))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaInfoPeer.Len)))
+
+	nlMsgHdr.Len += unix.SizeofIfInfomsg
 
 	rta = &unix.RtAttr{
 		Len:  unix.SizeofRtAttr + uint16(len(pveth)+1),
 		Type: unix.IFLA_IFNAME, // 表示指定名称
 	}
-	data = append(data, shlnl.WriteRtAttrToBuf(rta, append([]byte(pveth), 0))...)
+	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rta, append([]byte(pveth), 0)))
+	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rta.Len)))
 
-	nlMsgHdr.Len += uint32(rta.Len + rtaLinkInfo.Len + rtaInfoKind.Len + rtaInfoData.Len + rtaInfoPeer.Len + rta.Len)
-	fmt.Println(nlMsgHdr.Len)
-	data = append(shlnl.WriteNlMsghdrToBuf(nlMsgHdr), data...)
+	// 拷贝nlMsgHdr
+	bnlMsgHdr := shlnl.WriteNlMsghdrToBuf(nlMsgHdr)
+	copy(data[0:], bnlMsgHdr)
 
-	err = unix.Sendto(socket, data, 0, nlSockAddr)
+	sendbuf := data[:nlMsgHdr.Len]
+	for i := 0; i < len(sendbuf); i++ {
+		fmt.Printf("%x ", sendbuf[i])
+	}
+	err = unix.Sendto(socket, sendbuf, 0, nlSockAddr)
 	if err != nil {
 		panic(err)
 	}
@@ -115,9 +128,9 @@ func main() {
 	if ret.Type == unix.NLMSG_ERROR {
 		nlerr := (*unix.NlMsgerr)(unsafe.Pointer(uptr + unix.SizeofNlMsghdr))
 		if nlerr.Error < 0 {
-			panic(fmt.Sprintf("error: %d\n, failed to create links\n", nlerr.Error))
+			fmt.Println(fmt.Sprintf("error: %d, failed to create links", nlerr.Error))
 		}
 	} else {
-		panic("failed to create links")
+		fmt.Println("failed to create links")
 	}
 }

@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"github.com/Senhnn/go_tool/shlnl"
 	"golang.org/x/sys/unix"
-	"time"
 	"unsafe"
 )
 
-var veth = "veth1"
-var pveth = "pveth1"
+var veth = "shlveth1"
+var pveth = "shlpveth1"
 
 func main() {
 	// 常见netlink套接字
@@ -31,8 +30,8 @@ func main() {
 		// NLM_F_EXCL：Don't replace if the object already exists.  -- From linux man
 		// NLM_F_ACK：要求内核为该请求发送回复响应。Request for an acknowledgement on success. -- From linux man
 		Flags: unix.NLM_F_REQUEST | unix.NLM_F_CREATE | unix.NLM_F_EXCL | unix.NLM_F_ACK,
-		Seq:   uint32(time.Now().Unix()),
-		Pid:   uint32(unix.Getpid()), // Port ID
+		Seq:   0,
+		Pid:   0, // Port ID
 	}
 
 	ifInfoMsg := &unix.IfInfomsg{
@@ -52,6 +51,7 @@ func main() {
 		Len:  unix.SizeofRtAttr,
 		Type: unix.IFLA_LINKINFO, // 设置link info
 	}
+	rtaLinkInfoOffset := nlMsgHdr.Len
 	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaLinkInfo, nil))
 	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaLinkInfo.Len)))
 
@@ -84,6 +84,7 @@ func main() {
 		Len:  unix.SizeofRtAttr,
 		Type: unix.IFLA_INFO_DATA,
 	}
+	rtaInfoDataOffset := nlMsgHdr.Len
 	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaInfoData, nil))
 	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaInfoData.Len)))
 
@@ -91,6 +92,7 @@ func main() {
 		Len:  unix.SizeofRtAttr,
 		Type: 1, // 对端接口
 	}
+	rtaInfoPeerOffset := nlMsgHdr.Len
 	copy(data[nlMsgHdr.Len:], shlnl.WriteRtAttrToBuf(rtaInfoPeer, nil))
 	nlMsgHdr.Len = uint32(shlnl.NlmAlignOf(int(nlMsgHdr.Len)) + shlnl.RtaAlignOf(int(rtaInfoPeer.Len)))
 
@@ -107,10 +109,19 @@ func main() {
 	bnlMsgHdr := shlnl.WriteNlMsghdrToBuf(nlMsgHdr)
 	copy(data[0:], bnlMsgHdr)
 
+	// 设置linkinfo到消息最后的长度
+	((*unix.RtAttr)(unsafe.Pointer(&data[rtaLinkInfoOffset]))).Len = uint16(nlMsgHdr.Len - rtaLinkInfoOffset)
+	((*unix.RtAttr)(unsafe.Pointer(&data[rtaInfoDataOffset]))).Len = uint16(nlMsgHdr.Len - rtaInfoDataOffset)
+	((*unix.RtAttr)(unsafe.Pointer(&data[rtaInfoPeerOffset]))).Len = uint16(nlMsgHdr.Len - rtaInfoPeerOffset)
+
 	sendbuf := data[:nlMsgHdr.Len]
-	for i := 0; i < len(sendbuf); i++ {
-		fmt.Printf("%x ", sendbuf[i])
-	}
+	//for i := 0; i < len(sendbuf); i++ {
+	//	if i%16 == 0 {
+	//		fmt.Printf("\n")
+	//	}
+	//	fmt.Printf("%.2x ", sendbuf[i])
+	//}
+	//fmt.Printf("\n")
 	err = unix.Sendto(socket, sendbuf, 0, nlSockAddr)
 	if err != nil {
 		panic(err)
@@ -133,4 +144,5 @@ func main() {
 	} else {
 		fmt.Println("failed to create links")
 	}
+	return
 }

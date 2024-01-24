@@ -7,6 +7,11 @@ import (
 	"unsafe"
 )
 
+/* 实现命令
+ * 作用：创建一对veth
+ * ip link add ${veth} type veth peer name ${pveth}
+ */
+
 var veth = "shlveth1"
 var pveth = "shlpveth1"
 
